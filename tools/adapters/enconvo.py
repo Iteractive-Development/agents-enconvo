@@ -232,8 +232,8 @@ class EnconvoAdapter(HarnessAdapter):
         data = {
             "name": "agents-enconvo",
             "owner": {
-                "name": "bradhallett",
-                "url": "https://github.com/bradhallett/agents",
+                "name": "Iteractive Development",
+                "url": "https://github.com/Iteractive-Development/agents-enconvo",
             },
             "metadata": {
                 "description": ("wshobson/agents plugins with model aliases resolved for Enconvo"),
