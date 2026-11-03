@@ -20,6 +20,9 @@ __pycache__/
 # Application specific files
 venv
 .venv
+.venv-eval
+.ruff_cache
+.pytest_cache
 node_modules
 .sass-cache
 .claude

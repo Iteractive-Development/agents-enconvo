@@ -2566,3 +2566,32 @@ class TestEnconvoSurfaceCompleteness:
         assert entry["category"] == "documentation"
         assert entry["keywords"] == ["a"]
         assert entry["license"] == "MIT"
+
+
+class TestEnconvoShortDescriptionTruncation:
+    """Truncated interface subtitles must stay meaningful, not dangle."""
+
+    def test_longest_clean_prefix_wins(self):
+        from tools.adapters.enconvo import _truncate_short_description as trunc
+
+        assert trunc("Short one") == "Short one"
+        assert trunc("WCAG accessibility auditing, compliance validation") == (
+            "WCAG accessibility auditing, c"
+        )
+
+    def test_never_ends_on_a_dangling_connective(self):
+        from tools.adapters.enconvo import _truncate_short_description as trunc
+
+        for source in (
+            "Cloud architecture design for AWS/Azure/GCP/OCI, and more",
+            "Frontend UI development and mobile app patterns",
+            "Unity game development with C# and Unity",
+            "Hermes Agent plugin for public posting",
+            "Systems programming with Rust and C",
+            "Create production-ready, editable PowerPoint decks through a workflow",
+        ):
+            cut = trunc(source)
+            assert len(cut) <= 30
+            assert not re.search(
+                r"\b(for|with|and|of|to|in|a|an|the|via|using)\b\s*$", cut, re.I
+            ), f"{cut!r} dangles (from {source!r})"

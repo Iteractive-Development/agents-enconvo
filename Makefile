@@ -10,8 +10,10 @@
 
 GENERATE := tools/generate.py
 # Keep the eval tool's virtualenv OUT of plugins/plugin-eval (a source plugin that
-# can be packed/installed): UV_PROJECT_ENVIRONMENT relocates it to the repo root.
-export UV_PROJECT_ENVIRONMENT := .venv-eval
+# can be packed/installed): UV_PROJECT_ENVIRONMENT relocates it. The value MUST be
+# absolute — uv resolves a relative path against --project (plugins/plugin-eval),
+# which would put the venv right back inside the shipped plugin.
+export UV_PROJECT_ENVIRONMENT := $(abspath .venv-eval)
 EVAL_PROJECT := --project plugins/plugin-eval
 YTX_DIR := tools/yt-design-extractor
 YTX_SCRIPT := yt-design-extractor.py

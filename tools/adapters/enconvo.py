@@ -37,6 +37,7 @@ Structure per plugin:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from tools.adapters.base import (
@@ -74,6 +75,12 @@ _CODEX_CATEGORY_MAP = {
 # as OpenAI's portal does).
 _SHORT_DESCRIPTION_LIMIT = 30
 
+# A word-boundary cut can still land on a dangling connective ("design for",
+# "development and") — a mid-word fragment reads better than a broken phrase.
+_DANGLING_END = re.compile(
+    r"\b(for|with|and|of|to|in|a|an|the|via|using|create|build|generate|manage)\b\s*$", re.I
+)
+
 # Plugin-root entries that are the plugin's runtime surface for Enconvo. Anything
 # else at the plugin root (hidden files, local caches, test fixtures) is skipped so
 # a packed archive stays clean and installable.
@@ -99,14 +106,20 @@ _SUPPORT_DIR_EXCLUDES = frozenset({"test", "tests", ".venv", ".ruff_cache", "__p
 
 
 def _truncate_short_description(text: str) -> str:
-    """Trim to the 30-char interface.shortDescription limit on a word boundary."""
+    """Fit the 30-char interface.shortDescription limit without dangling phrases.
+
+    Take the longest prefix (up to the limit) that doesn't end on a dangling
+    connective ("…for", "…and"): prefer a word boundary, fall back to cutting a
+    word mid-spelling, and only keep a connective when no cut fits at all.
+    """
     text = " ".join(text.split())
     if len(text) <= _SHORT_DESCRIPTION_LIMIT:
         return text
-    cut = text[:_SHORT_DESCRIPTION_LIMIT]
-    if " " in cut:
-        cut = cut[: cut.rfind(" ")]
-    return cut.rstrip(" ,;:-")
+    for end in range(_SHORT_DESCRIPTION_LIMIT, 0, -1):
+        cut = text[:end].rstrip(" ,;:-")
+        if cut and not _DANGLING_END.search(cut):
+            return cut
+    return text[:_SHORT_DESCRIPTION_LIMIT]
 
 
 def _enconvo_codex_manifest(data: dict) -> dict:
