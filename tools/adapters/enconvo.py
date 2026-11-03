@@ -9,8 +9,9 @@ so a user whose providers exclude Anthropic silently loses every tier hint.
 The adapter emits self-contained per-plugin trees at `.enconvo/plugins/<plugin>/`
 in the Claude Code plugin format Enconvo reads natively, with `model:` resolved to
 concrete model IDs from `MODEL_ALIASES["enconvo"]` (defaults to the z.ai GLM
-catalog), plus a generated `.enconvo/marketplace.json` pointing at the trees so
-`enconvo plugin install .enconvo --plugin <name>` installs a resolved copy.
+catalog), plus a generated `.enconvo/.claude-plugin/marketplace.json` pointing at
+the trees so `enconvo plugin install .enconvo --plugin <name>` installs a resolved
+copy.
 
 Structure per plugin:
 
@@ -25,6 +26,12 @@ Structure per plugin:
                                     (references/, assets/, …) mirrored
       commands/<command>.md         verbatim — `$ARGUMENTS` and `` !`cmd` ``
                                     lines work in Enconvo as in Claude Code
+      hooks/hooks.json, *.sh        mirrored with the executable bit preserved
+                                    (Enconvo installs hooks disabled until the
+                                    user allows them)
+      templates/ policies/ …        plugin-root support files the source plugin
+                                    ships (${CLAUDE_PLUGIN_ROOT} targets), minus
+                                    local caches and test fixtures
 """
 
 from __future__ import annotations
@@ -47,6 +54,81 @@ from tools.adapters.capabilities import resolve_model
 # Every character YAML treats as structural inside a flow collection. A plain scalar
 # in flow context may not contain any of them, at any position.
 _YAML_FLOW_DELIMITERS = ("[", "]", "{", "}", ",")
+
+# Fields a Claude Code plugin.json doesn't read — the marketplace entry is their
+# documented home, so the adapter moves them there instead of dropping the data
+# (Enconvo's validator reports them as plugin_manifest_field_unsupported).
+_CLAUDE_MANIFEST_UNSUPPORTED_FIELDS = ("category", "keywords", "homepage", "license")
+
+# Marketplace-entry fields the Enconvo validator knows (validation-codes#manifests).
+# The Codex categories the source manifests use map onto OpenAI's portal set here.
+_CODEX_CATEGORY_MAP = {
+    "Coding": "Developer Tools",
+    "coding": "Developer Tools",
+    "creative": "Creativity",
+    "documentation": "Education & Research",
+    "marketing": "Business & Operations",
+}
+
+# interface.shortDescription limit the Enconvo validator enforces (30 characters,
+# as OpenAI's portal does).
+_SHORT_DESCRIPTION_LIMIT = 30
+
+# Plugin-root entries that are the plugin's runtime surface for Enconvo. Anything
+# else at the plugin root (hidden files, local caches, test fixtures) is skipped so
+# a packed archive stays clean and installable.
+_PLUGIN_ROOT_WHITELIST = frozenset(
+    {
+        "hooks",
+        "templates",
+        "policies",
+        "stories",
+        "scripts",
+        "src",
+        "pyproject.toml",
+        "uv.lock",
+        "README.md",
+        ".mcp.json",
+        "mcp.json",
+    }
+)
+
+# Support directories never mirrored into `.enconvo/` — they hold dev-time fixtures
+# and caches, not runtime surface (publishing-guidelines: keep the package clean).
+_SUPPORT_DIR_EXCLUDES = frozenset({"test", "tests", ".venv", ".ruff_cache", "__pycache__"})
+
+
+def _truncate_short_description(text: str) -> str:
+    """Trim to the 30-char interface.shortDescription limit on a word boundary."""
+    text = " ".join(text.split())
+    if len(text) <= _SHORT_DESCRIPTION_LIMIT:
+        return text
+    cut = text[:_SHORT_DESCRIPTION_LIMIT]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,;:-")
+
+
+def _enconvo_codex_manifest(data: dict) -> dict:
+    """Normalize a `.codex-plugin/plugin.json` for Enconvo's interface schema.
+
+    The committed Codex manifests are written for Codex's own page, whose category
+    vocabulary and description lengths differ from OpenAI's portal rules Enconvo
+    validates against (`plugin_category_unknown`, `plugin_short_description_too_long`).
+    Enconvo reads the `interface` block for the plugin's page, so the adapter maps
+    the category onto the documented enum and shortens the subtitle in the emitted
+    copy — the source manifest stays untouched for clean upstream merges.
+    """
+    out = json.loads(json.dumps(data))  # deep copy; never mutate the loaded source
+    interface = out.get("interface")
+    if isinstance(interface, dict):
+        category = interface.get("category")
+        if category in _CODEX_CATEGORY_MAP:
+            interface["category"] = _CODEX_CATEGORY_MAP[category]
+        short = interface.get("shortDescription")
+        if isinstance(short, str):
+            interface["shortDescription"] = _truncate_short_description(short)
+    return out
 
 
 def _yaml_flow_scalar(value: object) -> str:
@@ -106,10 +188,12 @@ class EnconvoAdapter(HarnessAdapter):
             self._emit_skill(plugin, skill, result)
         for command in plugin.commands:
             self._emit_command(plugin, command, result)
+        self._emit_hooks(plugin, result)
+        self._emit_support_files(plugin, result)
         return result
 
     def emit_global(self, plugins: list[PluginSource]) -> EmitResult:
-        """Emit `.enconvo/marketplace.json` pointing at the generated plugin trees."""
+        """Emit `.enconvo/.claude-plugin/marketplace.json` for the generated trees."""
         return self._emit_marketplace(plugins)
 
     # ── Internals ──────────────────────────────────────────────────────────
@@ -118,21 +202,37 @@ class EnconvoAdapter(HarnessAdapter):
         return Path(".enconvo") / "plugins" / plugin.name
 
     def _emit_manifests(self, plugin: PluginSource, result: EmitResult) -> None:
-        """Mirror the source manifests verbatim.
+        """Emit the plugin manifests, normalized for Enconvo's validators.
 
         `.claude-plugin/plugin.json` is what makes the folder a Claude Code-format
-        plugin to Enconvo; `.codex-plugin/plugin.json` is optional but Enconvo reads
-        its `interface` listing (display name, default prompts, links, icon) for the
-        plugin's page, and the committed Codex manifest already carries it.
+        plugin to Enconvo. Fields Claude Code doesn't read (`category`, `keywords`,
+        `homepage`, `license`) are moved onto the marketplace entry instead — their
+        documented home — so the emitted manifest validates without losing data;
+        `skills` is normalized to the skills root so Enconvo's one-level
+        `skills/<name>/SKILL.md` scan finds every skill.
+        `.codex-plugin/plugin.json` is optional but Enconvo reads its `interface`
+        listing for the plugin's page; it is normalized to the interface schema
+        Enconvo validates (see `_enconvo_codex_manifest`). The source manifests stay
+        untouched for clean upstream merges.
         """
         root = self._plugin_root(plugin)
         source_manifest = plugin.dir / ".claude-plugin" / "plugin.json"
         if source_manifest.is_file():
+            data = json.loads(source_manifest.read_text(encoding="utf-8"))
+            for field in _CLAUDE_MANIFEST_UNSUPPORTED_FIELDS:
+                data.pop(field, None)
+            skills = data.get("skills")
+            if isinstance(skills, list):
+                # A list of per-skill paths defeats Enconvo's skills/<name>/SKILL.md
+                # scan (skill_file_ignored); the skills root is the documented shape.
+                data["skills"] = "./skills"
             result.written.append(
-                self.mirror_file(source_manifest, root / ".claude-plugin" / "plugin.json")
+                self.write(
+                    root / ".claude-plugin" / "plugin.json", json.dumps(data, indent=2) + "\n"
+                )
             )
         else:
-            data: dict = {"name": plugin.name}
+            data = {"name": plugin.name}
             if plugin.description:
                 data["description"] = plugin.description
             result.written.append(
@@ -142,9 +242,60 @@ class EnconvoAdapter(HarnessAdapter):
             )
         codex_manifest = plugin.dir / ".codex-plugin" / "plugin.json"
         if codex_manifest.is_file():
-            result.written.append(
-                self.mirror_file(codex_manifest, root / ".codex-plugin" / "plugin.json")
+            codex_data = _enconvo_codex_manifest(
+                json.loads(codex_manifest.read_text(encoding="utf-8"))
             )
+            result.written.append(
+                self.write(
+                    root / ".codex-plugin" / "plugin.json",
+                    json.dumps(codex_data, indent=2) + "\n",
+                )
+            )
+
+    def _emit_hooks(self, plugin: PluginSource, result: EmitResult) -> None:
+        """Mirror `hooks/` and any MCP config so the plugin's full surface installs.
+
+        Enconvo installs hooks disabled until the user allows them (hooks doc), so
+        mirroring is safe — but skipping them silently amputates plugins whose
+        behavior lives in hooks (protect-mcp, review-agent-governance). The shell
+        scripts keep their executable bit; `.mcp.json`/`mcp.json` ride along when
+        present.
+        """
+        root = self._plugin_root(plugin)
+        for rel_name in ("hooks", ".mcp.json", "mcp.json"):
+            src = plugin.dir / rel_name
+            if not src.exists():
+                continue
+            if src.is_dir():
+                for file in sorted(x for x in src.rglob("*") if x.is_file()):
+                    rel = file.relative_to(plugin.dir)
+                    target = self.mirror_file(file, root / rel)
+                    if file.suffix == ".sh" and file.stat().st_mode & 0o111:
+                        target.chmod(target.stat().st_mode | 0o111)
+                    result.written.append(target)
+            else:
+                result.written.append(self.mirror_file(src, root / rel_name))
+
+    def _emit_support_files(self, plugin: PluginSource, result: EmitResult) -> None:
+        """Mirror plugin-root support entries components reference at runtime.
+
+        Commands, agents, hooks and skills resolve paths against the installed
+        plugin root via `${CLAUDE_PLUGIN_ROOT}` (plugin-formats doc), so the support
+        trees they reference must ship inside the plugin. Only whitelisted runtime
+        entries are mirrored; dev-time fixtures, caches and venvs stay out.
+        """
+        root = self._plugin_root(plugin)
+        for entry in sorted(plugin.dir.iterdir()):
+            if entry.name not in _PLUGIN_ROOT_WHITELIST:
+                continue
+            if entry.is_dir():
+                for file in sorted(x for x in entry.rglob("*") if x.is_file()):
+                    rel = file.relative_to(plugin.dir)
+                    if any(part in _SUPPORT_DIR_EXCLUDES for part in rel.parts):
+                        continue
+                    result.written.append(self.mirror_file(file, root / rel))
+            else:
+                result.written.append(self.mirror_file(entry, root / entry.name))
 
     def _emit_agent(self, plugin: PluginSource, agent: AgentSource, result: EmitResult) -> None:
         """Emit one agent with `model:` resolved; the body is kept verbatim.
@@ -211,12 +362,21 @@ class EnconvoAdapter(HarnessAdapter):
         result.written.append(self.write(rel, content))
 
     def _emit_marketplace(self, plugins: list[PluginSource]) -> EmitResult:
-        """Emit `.enconvo/marketplace.json` pointing at the generated plugin trees.
+        """Emit `.enconvo/.claude-plugin/marketplace.json` for the generated trees.
 
-        `enconvo plugin install .enconvo --plugin <name>` resolves each entry's
-        `source` relative to the marketplace file, so adding one marketplace covers
-        every generated plugin, and re-running the install after a regenerate
-        updates the installed copy.
+        A marketplace is a folder with `.claude-plugin/marketplace.json` or
+        `.agents/plugins/marketplace.json` (installing-plugins doc); the file at
+        `.enconvo/` root is not one, so the CLI fails the install with
+        `plugin_manifest_missing`. Sources are `./plugins/<name>` folders resolved
+        from the top of the marketplace, and the fields Claude Code's plugin.json
+        doesn't read (`category`, `keywords`, `homepage`, `license`) live on the
+        entry — their documented home.
+
+        `enconvo plugin install .enconvo --plugin <name>` then installs a resolved
+        copy, and re-running the install after a regenerate updates it. The two
+        external `git-subdir` plugins the source marketplace lists (pensyve,
+                hol-guard) are carried over verbatim so the generated catalog matches the
+        source one.
         """
         result = EmitResult()
         entries = []
@@ -228,7 +388,11 @@ class EnconvoAdapter(HarnessAdapter):
                 entry["version"] = plugin.version
             if plugin.author.get("name"):
                 entry["author"] = plugin.author
+            for field in _CLAUDE_MANIFEST_UNSUPPORTED_FIELDS:
+                if field in plugin.plugin_json:
+                    entry[field] = plugin.plugin_json[field]
             entries.append(entry)
+        entries.extend(self._external_marketplace_entries())
         data = {
             "name": "agents-enconvo",
             "owner": {
@@ -242,6 +406,32 @@ class EnconvoAdapter(HarnessAdapter):
             "plugins": entries,
         }
         result.written.append(
-            self.write(Path(".enconvo") / "marketplace.json", json.dumps(data, indent=2) + "\n")
+            self.write(
+                Path(".enconvo") / ".claude-plugin" / "marketplace.json",
+                json.dumps(data, indent=2) + "\n",
+            )
         )
         return result
+
+    def _external_marketplace_entries(self) -> list[dict]:
+        """Carry the source marketplace's external entries into the generated one.
+
+        The committed `.claude-plugin/marketplace.json` lists two `git-subdir`
+        plugins that have no local tree under `plugins/`; without them the generated
+        catalog silently drops plugins the source marketplace offers. Only entries
+        whose `source` is not a local `./plugins/<name>` folder are returned.
+        """
+        source = Path(".claude-plugin") / "marketplace.json"
+        if not source.is_file():
+            return []
+        try:
+            data = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        entries: list[dict] = []
+        for entry in data.get("plugins", []):
+            src = entry.get("source")
+            if isinstance(src, str) and src.startswith("./plugins/"):
+                continue  # local tree — emitted above from the loaded plugins
+            entries.append(entry)
+        return entries

@@ -207,7 +207,8 @@ smoke-test script skeleton:
   requires for long-context/code/math
   validation.
 - `finetuning-method-selection` — its
-  `references/model-catalog.md` is the place
+  `references/model-catalog.md` (found in
+  `../finetuning-method-selection/references/`) is the place
   to check hardware-class assumptions (which
   GPU generations a base model targets) before
   picking a format off the Format Map above.

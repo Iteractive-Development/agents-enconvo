@@ -248,5 +248,5 @@ create the policy in Step 2.
 - [@veritasacta/verify on npm](https://www.npmjs.com/package/@veritasacta/verify)
 - [in-toto/attestation#549](https://github.com/in-toto/attestation/pull/549) — Decision Receipt predicate proposal
 - [agent-commit build type](https://refs.arewm.com/agent-commit/v0.2) — SLSA provenance for agent-produced commits
-- [Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (`examples/protect-mcp-governed/`)
+- [Microsoft Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit)
 - [AWS Cedar for Agents](https://github.com/cedar-policy/cedar-for-agents)

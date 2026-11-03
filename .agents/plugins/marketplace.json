@@ -1,5 +1,8 @@
 {
   "name": "claude-code-workflows",
+  "interface": {
+    "displayName": "Claude Code Workflows"
+  },
   "plugins": [
     {
       "name": "accessibility-compliance",

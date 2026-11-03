@@ -18,7 +18,7 @@ formats used by other tools.
 | **Google Antigravity CLI** (`agy`) | supported | gitignored: `.antigravity/plugins/<name>/{skills/,agents/,commands/}` |
 | **GitHub Copilot** | supported | gitignored: `.copilot/agents/`, `.copilot/skills/`, `.copilot/commands/` |
 | **Pi** (`pi`, `@earendil-works/pi-coding-agent`) | supported | gitignored: `.pi/{skills/<plugin>/<skill>/,prompts/,agents/}` |
-| **Enconvo** (<https://enconvo.ai>) | supported | gitignored: `.enconvo/plugins/<name>/`, `.enconvo/marketplace.json` |
+| **Enconvo** (<https://enconvo.ai>) | supported | gitignored: `.enconvo/plugins/<name>/`, `.enconvo/.claude-plugin/marketplace.json` |
 | **Agent Skills installers** (`gh skill` 2.90+, `npx skills`) | supported, skills only | nothing generated; both read `plugins/*/skills/` from GitHub directly, see [Skills-only installers](#skills-only-installers) |
 
 ## Capability matrix
@@ -152,14 +152,19 @@ The adapter exists for model resolution: Enconvo honors an agent's `model:` fron
 only when the chat's model provider carries a matching model, and the source aliases
 name Claude models. `make generate HARNESS=enconvo` emits self-contained plugins with
 `model:` resolved to `MODEL_ALIASES["enconvo"]` (default: the z.ai GLM catalog — edit
-that one dict to retarget your providers), plus `.enconvo/marketplace.json` pointing at
+that one dict to retarget your providers), plus `.enconvo/.claude-plugin/marketplace.json`
+(the marketplace path Enconvo's CLI detects — a root-level `marketplace.json` is not one)
+pointing at
 the generated trees.
 
 ```bash
-make generate HARNESS=enconvo
-make install-enconvo                                # enconvo plugin install .enconvo
-make install-enconvo ENCONVO_PLUGIN=python-development
+make install-enconvo ENCONVO_PLUGIN=python-development   # generate + install that plugin
 ```
+
+`make install-enconvo` generates `.enconvo/` first (it is gitignored), then calls the
+Enconvo CLI bundled with the app (`node $(ENCONVO_CLI) plugin install .enconvo
+--plugin <name>`) — the npm `@enconvo/api` 0.1.174 predates the `plugin` subcommands,
+and a marketplace source requires `--plugin` (without it the CLI lists the catalog).
 
 - `inherit` omits the `model:` field entirely, so the chat's model applies.
 - Skills, commands, hooks, MCP servers, and `userConfig` settings load natively from

@@ -9,6 +9,9 @@
 #   - tools/yt-design-extractor/  — standalone YouTube extractor (heavy + optional)
 
 GENERATE := tools/generate.py
+# Keep the eval tool's virtualenv OUT of plugins/plugin-eval (a source plugin that
+# can be packed/installed): UV_PROJECT_ENVIRONMENT relocates it to the repo root.
+export UV_PROJECT_ENVIRONMENT := .venv-eval
 EVAL_PROJECT := --project plugins/plugin-eval
 YTX_DIR := tools/yt-design-extractor
 YTX_SCRIPT := yt-design-extractor.py
@@ -22,13 +25,13 @@ UV_TOOLS := uv run $(EVAL_PROJECT) python
 RUFF_PATHS := ../../tools/ src/plugin_eval/
 TY_PATHS := ../../tools/adapters/ ../../tools/generate.py ../../tools/validate_generated.py ../../tools/doc_gardener.py ../../tools/install_opencode.py ../../tools/install_copilot.py ../../tools/install_antigravity.py ../../tools/install_pi.py ../../tools/check_agent_name_collisions.py ../../tools/tests/ src/plugin_eval/
 
-.PHONY: help install install-ocr install-easyocr deps check run run-full run-ocr run-transcript clean generate generate-all clean-generated install-opencode uninstall-opencode install-copilot uninstall-copilot install-antigravity uninstall-antigravity install-pi uninstall-pi validate garden lint format test smoke-test eval-snapshot
+.PHONY: help install install-ocr install-easyocr deps check run run-full run-ocr run-transcript clean generate generate-all clean-generated install-opencode uninstall-opencode install-copilot uninstall-copilot install-antigravity uninstall-antigravity install-pi uninstall-pi install-enconvo validate garden lint format test smoke-test eval-snapshot
 
 help:
 	@echo "claude-agents — multi-harness plugin marketplace"
 	@echo "================================================="
 	@echo ""
-	@echo "Multi-harness adapter (Codex / Cursor / OpenCode / Antigravity / Pi):"
+	@echo "Multi-harness adapter (Codex / Cursor / OpenCode / Antigravity / Pi / Enconvo):"
 	@echo "  make generate HARNESS=<h> [PLUGIN=<p>]           Generate per-harness artifacts (defaults to all plugins)"
 	@echo "  make generate-all                                Generate for ALL harnesses + ALL plugins"
 	@echo "  make clean-generated [HARNESS=<h>]               Remove generated artifacts"
@@ -40,6 +43,7 @@ help:
 	@echo "  make uninstall-antigravity                       Remove repo-owned Antigravity symlinks"
 	@echo "  make install-pi [FORCE=1]                        Symlink Pi skills, prompts, and agents into ~/.pi/agent"
 	@echo "  make uninstall-pi                                Remove repo-owned Pi symlinks"
+	@echo "  make install-enconvo [ENCONVO_PLUGIN=<p>]        Install resolved plugins into Enconvo (app-bundled CLI)"
 	@echo "  make validate [HARNESS=<h>] [STRICT=1]           Structural validation of generated artifacts"
 	@echo "  make garden [STRICT=1]                           Run doc-gardener (drift detection)"
 	@echo "  make lint                                        ruff + ty, exactly as CI runs them"
@@ -169,7 +173,7 @@ clean:
 #   make generate-all
 #   make clean-generated HARNESS=opencode
 
-HARNESSES := codex copilot cursor opencode antigravity pi
+HARNESSES := codex copilot cursor opencode antigravity pi enconvo
 
 generate:
 ifndef HARNESS
@@ -248,11 +252,19 @@ else
 	done
 endif
 
+# Install resolved plugins into Enconvo. `plugin install`/`marketplace` need an
+# @enconvo/api release NEWER than the npm 0.1.174 (docs: installing-plugins), so
+# this uses the CLI bundled with the Enconvo app; fall back to ENCONVO_CLI to
+# override. A marketplace source also requires --plugin <name> (omitting it just
+# lists the marketplace), and .enconvo/ is gitignored, so generate it first.
+ENCONVO_CLI ?= /Applications/Enconvo.app/Contents/Resources/EnconvoCommands.bundle/Contents/Resources/node_modules/@enconvo/api/bin/enconvo.js
+
 install-enconvo:
+	$(UV_TOOLS) $(GENERATE) --harness enconvo --all --prune
 ifndef ENCONVO_PLUGIN
-	npx -p @enconvo/api enconvo plugin install .enconvo
+	node $(ENCONVO_CLI) plugin install .enconvo --plugin '$(firstword $(ENCONVO_PLUGINS))' 		|| { echo 'Set ENCONVO_PLUGIN=<name> (or ENCONVO_PLUGINS="a b c"), or run:'; 		     echo '  node $(ENCONVO_CLI) plugin install .enconvo --plugin <name>'; 		     exit 1; }
 else
-	npx -p @enconvo/api enconvo plugin install .enconvo --plugin '$(ENCONVO_PLUGIN)'
+	node $(ENCONVO_CLI) plugin install .enconvo --plugin '$(ENCONVO_PLUGIN)'
 endif
 
 install-opencode:

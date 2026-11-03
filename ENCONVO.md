@@ -4,7 +4,7 @@ A synced copy of [wshobson/agents](https://github.com/wshobson/agents) (MIT) wit
 Enconvo harness adapter. Upstream is pulled weekly; this repo only adds:
 
 - `tools/adapters/enconvo.py` — emits `.enconvo/` (gitignored): one resolved copy
-  of each upstream plugin plus `marketplace.json`.
+  of each upstream plugin plus `.claude-plugin/marketplace.json`.
 - the `enconvo` entry in `tools/adapters/capabilities.py` — capability matrix and
   the model alias map.
 
@@ -26,18 +26,17 @@ fields upstream and pass through unchanged.
 
 ```bash
 git pull upstream main                          # bring in upstream
-git push origin main                            # keep this repo current
-make generate HARNESS=enconvo                   # regenerate .enconvo/
-for d in .enconvo/plugins/*/; do                # install: sync each plugin
-  rsync -a --delete "$d" "$HOME/.config/enconvo/extension/$(basename "$d")"
-
-done
+make install-enconvo ENCONVO_PLUGIN=<name>      # generate + install one plugin
 ```
 
-The npm `@enconvo/api` CLI (0.1.174) predates marketplace and folder installs,
-so plugins are delivered by syncing into Enconvo's extension directory — the same
-location its dev builds use. **Restart Enconvo** to load catalog changes. Scope
-`--delete` per plugin folder only; never at the extension directory root.
+`make install-enconvo` generates `.enconvo/` (gitignored) and then runs the Enconvo
+CLI bundled with the app — `node $ENCONVO_CLI plugin install .enconvo --plugin
+<name>` — because the npm `@enconvo/api` CLI (0.1.174) predates the plugin
+subcommands, and a marketplace source requires `--plugin` (without it the CLI just
+lists the catalog; a marketplace install needs Enconvo 2.5.6+ running). To install
+everything at once, `make generate HARNESS=enconvo` then rsync each tree into
+`$HOME/.config/enconvo/extension/<name>` (scope `--delete` per plugin folder only,
+never at the extension directory root) and **restart Enconvo** to load the catalog.
 
 A scheduled Enconvo job runs this loop weekly and reports what changed.
 

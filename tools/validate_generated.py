@@ -862,6 +862,84 @@ def validate_enconvo(report: Report) -> None:
                 message="missing .claude-plugin/plugin.json",
                 remediation="Regenerate via `make generate HARNESS=enconvo`.",
             )
+        else:
+            try:
+                manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                report.add(
+                    severity="error",
+                    harness="enconvo",
+                    path=manifest,
+                    message=f"plugin.json is not valid JSON: {e}",
+                    remediation="Regenerate via `make generate HARNESS=enconvo`.",
+                )
+                manifest_data = None
+            if isinstance(manifest_data, dict):
+                # Fields Claude Code doesn't read belong on the marketplace entry
+                # (plugin_manifest_field_unsupported), and `skills` must name the
+                # skills root — a list of per-skill paths defeats Enconvo's
+                # one-level skills/<name>/SKILL.md scan (skill_file_ignored).
+                for unsupported in ("category", "keywords", "homepage", "license"):
+                    if unsupported in manifest_data:
+                        report.add(
+                            severity="error",
+                            harness="enconvo",
+                            path=manifest,
+                            message=f"unsupported field `{unsupported}` in .claude-plugin/plugin.json",
+                            remediation=(
+                                "The adapter must move it onto the marketplace entry. "
+                                "Regenerate via `make generate HARNESS=enconvo`."
+                            ),
+                        )
+                skills_field = manifest_data.get("skills")
+                if isinstance(skills_field, list):
+                    report.add(
+                        severity="error",
+                        harness="enconvo",
+                        path=manifest,
+                        message="`skills` lists per-skill paths instead of the skills root",
+                        remediation=(
+                            "Set `skills` to the root folder (default ./skills) so "
+                            "Enconvo's skills/<name>/SKILL.md scan finds every skill. "
+                            "Regenerate via `make generate HARNESS=enconvo`."
+                        ),
+                    )
+
+        # Hooks and MCP config must mirror the source plugin 1:1 — dropping them
+        # silently amputates plugins whose behavior lives there (protect-mcp,
+        # review-agent-governance).
+        source_plugins_root = WORKTREE / "plugins"
+        for hooks_candidate in (plugin_dir / "hooks",):
+            source_hooks = source_plugins_root / plugin_dir.name / "hooks"
+            if source_hooks.is_dir():
+                if not hooks_candidate.is_dir():
+                    report.add(
+                        severity="error",
+                        harness="enconvo",
+                        path=plugin_dir,
+                        message="source plugin has hooks/ but the generated tree does not",
+                        remediation="Regenerate via `make generate HARNESS=enconvo`.",
+                    )
+                else:
+                    for src_file in sorted(x for x in source_hooks.rglob("*") if x.is_file()):
+                        rel = src_file.relative_to(source_hooks)
+                        dst = hooks_candidate / rel
+                        if not dst.is_file():
+                            report.add(
+                                severity="error",
+                                harness="enconvo",
+                                path=plugin_dir,
+                                message=f"hooks file not mirrored: hooks/{rel}",
+                                remediation="Regenerate via `make generate HARNESS=enconvo`.",
+                            )
+                        elif src_file.suffix == ".sh" and not dst.stat().st_mode & 0o111:
+                            report.add(
+                                severity="error",
+                                harness="enconvo",
+                                path=dst,
+                                message="hook script lost its executable bit",
+                                remediation="Regenerate via `make generate HARNESS=enconvo`.",
+                            )
 
         agents_dir = plugin_dir / "agents"
         if agents_dir.is_dir():
@@ -944,7 +1022,16 @@ def validate_enconvo(report: Report) -> None:
                     report, fm, "description", "enconvo", command_md, label="command"
                 )
 
-    marketplace = WORKTREE / ".enconvo" / "marketplace.json"
+    marketplace = WORKTREE / ".enconvo" / ".claude-plugin" / "marketplace.json"
+    stale_root_marketplace = WORKTREE / ".enconvo" / "marketplace.json"
+    if stale_root_marketplace.is_file():
+        report.add(
+            severity="error",
+            harness="enconvo",
+            path=stale_root_marketplace,
+            message="marketplace.json sits at the .enconvo root; a marketplace needs .claude-plugin/marketplace.json",
+            remediation="Regenerate via `make generate HARNESS=enconvo` (prunes the stale file).",
+        )
     if marketplace.is_file():
         try:
             data = json.loads(marketplace.read_text(encoding="utf-8"))
@@ -957,14 +1044,28 @@ def validate_enconvo(report: Report) -> None:
                 remediation="Regenerate via `make generate HARNESS=enconvo`.",
             )
             return
+        listed = {entry.get("name") for entry in data.get("plugins", [])}
+        # Folder sources resolve from the top of the marketplace (.enconvo/),
+        # which is the marketplace file's parent's parent.
+        marketplace_root = marketplace.parent.parent
         for entry in data.get("plugins", []):
             source = entry.get("source", "")
-            if source and not (marketplace.parent / source).is_dir():
+            # External entries (git/npm/zip sources) are dicts, not local folders.
+            if isinstance(source, str) and source and not (marketplace_root / source).is_dir():
                 report.add(
                     severity="error",
                     harness="enconvo",
                     path=marketplace,
                     message=f"marketplace entry points at a missing tree: {source}",
+                    remediation="Regenerate via `make generate HARNESS=enconvo --all`.",
+                )
+        for plugin_dir in sorted(p for p in plugins_root.iterdir() if p.is_dir()):
+            if plugin_dir.name not in listed:
+                report.add(
+                    severity="error",
+                    harness="enconvo",
+                    path=marketplace,
+                    message=f"generated plugin missing from marketplace entries: {plugin_dir.name}",
                     remediation="Regenerate via `make generate HARNESS=enconvo --all`.",
                 )
 

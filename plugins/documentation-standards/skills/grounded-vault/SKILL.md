@@ -41,13 +41,13 @@ Every `wiki/` page opens with a header block:
 ```markdown
 # Authentication architecture
 
-> Raw: [raw/notes/auth-v1.md](../raw/notes/auth-v1.md), [raw/adr/0007-jwt.md](../raw/adr/0007-jwt.md)
+> Raw: `raw/notes/auth-v1.md`, `raw/adr/0007-jwt.md`
 > Fingerprint: git:5b237fa
 > Monitored: src/auth/jwt.ts, src/auth/session.ts, package.json
 > Status: Current
 ```
 
-- `Raw:` lists every source the page was compiled from. Inline claims link to their specific source as well: `Tokens expire after 15 minutes ([raw/adr/0007-jwt.md](../raw/adr/0007-jwt.md)).`
+- `Raw:` lists every source the page was compiled from. Inline claims link to their specific source as well: `Tokens expire after 15 minutes (`raw/adr/0007-jwt.md`).`
 - `Fingerprint:` is the short commit hash the page was compiled against.
 - `Monitored:` lists the code paths the page describes. A change to any of them after the fingerprint means the page may be stale.
 - `Status:` is `Current`, `Outdated` (monitored code moved on), or `Disputed` (a newer source contradicts the page).

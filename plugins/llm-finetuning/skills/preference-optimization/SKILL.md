@@ -180,8 +180,9 @@ SimPO sweep grid — plus Unsloth wrappers and a
 catastrophic-forgetting note live in
 `references/method-configs.md`. Those configs use
 the same current-TRL API conventions established
-in `lora-qlora-recipes`'s
-`references/unsloth-trl-mapping.md`
+in the `lora-qlora-recipes` skill's
+`references/unsloth-trl-mapping.md` (found in
+`../lora-qlora-recipes/references/`)
 (`processing_class`, not `tokenizer=`).
 
 `references/method-configs.md` also carries the

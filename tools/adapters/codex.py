@@ -582,6 +582,10 @@ class CodexAdapter(HarnessAdapter):
             )
         return {
             "name": root.get("name", "claude-code-workflows"),
+            # Codex (and Enconvo, reading the same catalog) shows the marketplace by
+            # interface.displayName — without it the validator flags
+            # marketplace_display_name_missing and the raw name is shown instead.
+            "interface": {"displayName": "Claude Code Workflows"},
             "plugins": entries,
         }
 

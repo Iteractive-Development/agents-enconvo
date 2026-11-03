@@ -2421,6 +2421,148 @@ class TestEnconvoCapabilities:
         assert (root / ".claude-plugin" / "plugin.json").is_file()
         assert (root / "skills" / "demo-skill" / "SKILL.md").is_file()
         marketplace = json.loads(
-            (out / ".enconvo" / "marketplace.json").read_text(encoding="utf-8")
+            (out / ".enconvo" / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
         )
         assert marketplace["plugins"][0]["source"] == "./plugins/demo"
+        # The root-level marketplace.json is NOT a marketplace to Enconvo's CLI
+        # (plugin_manifest_missing): the catalog must live under .claude-plugin/.
+        assert not (out / ".enconvo" / "marketplace.json").exists()
+
+
+class TestEnconvoSurfaceCompleteness:
+    """The emitted plugin must carry the full surface Enconvo installs."""
+
+    def _adapter(self, tmp_path):
+        from tools.adapters.enconvo import EnconvoAdapter
+
+        return EnconvoAdapter(output_root=tmp_path / "out"), tmp_path / "out"
+
+    def _plugin(self, tmp_path):
+        plugin_dir = tmp_path / "src" / "demo"
+        (plugin_dir / ".claude-plugin").mkdir(parents=True)
+        (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "demo", "description": "Demo."}), encoding="utf-8"
+        )
+        return plugin_dir, PluginSource(
+            name="demo", dir=plugin_dir, plugin_json={"name": "demo", "description": "Demo."}
+        )
+
+    def test_hooks_mirror_with_executable_bit(self, tmp_path):
+        plugin_dir, plugin = self._plugin(tmp_path)
+        hooks = plugin_dir / "hooks"
+        hooks.mkdir()
+        (hooks / "hooks.json").write_text("{}", encoding="utf-8")
+        (hooks / "evaluate.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (hooks / "evaluate.sh").chmod(0o755)
+        adapter, out = self._adapter(tmp_path)
+        adapter.emit_plugin(plugin)
+        emitted_hook = out / ".enconvo" / "plugins" / "demo" / "hooks" / "evaluate.sh"
+        assert emitted_hook.is_file()
+        assert emitted_hook.stat().st_mode & 0o111, "hook scripts must stay executable"
+        assert (out / ".enconvo" / "plugins" / "demo" / "hooks" / "hooks.json").is_file()
+
+    def test_support_dirs_mirror_but_tests_and_caches_do_not(self, tmp_path):
+        plugin_dir, plugin = self._plugin(tmp_path)
+        for rel in (
+            "templates/style.md",
+            "policies/policy.cedar",
+            "stories/_template.md",
+            "scripts/run.py",
+            "src/pkg/main.py",
+            "pyproject.toml",
+            "uv.lock",
+            "README.md",
+            "tests/test_pkg.py",
+            ".venv/pyvenv.cfg",
+        ):
+            target = plugin_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x", encoding="utf-8")
+        adapter, out = self._adapter(tmp_path)
+        adapter.emit_plugin(plugin)
+        root = out / ".enconvo" / "plugins" / "demo"
+        for kept in (
+            "templates/style.md",
+            "policies/policy.cedar",
+            "stories/_template.md",
+            "scripts/run.py",
+            "src/pkg/main.py",
+            "pyproject.toml",
+            "uv.lock",
+            "README.md",
+        ):
+            assert (root / kept).is_file(), kept
+        assert not (root / "tests").exists(), "test fixtures must not ship"
+        assert not (root / ".venv").exists(), "virtualenvs must not ship"
+
+    def test_mcp_configs_ride_along(self, tmp_path):
+        plugin_dir, plugin = self._plugin(tmp_path)
+        (plugin_dir / ".mcp.json").write_text("{}", encoding="utf-8")
+        adapter, out = self._adapter(tmp_path)
+        adapter.emit_plugin(plugin)
+        assert (out / ".enconvo" / "plugins" / "demo" / ".mcp.json").is_file()
+
+    def test_codex_interface_normalized_to_enconvo_schema(self, tmp_path):
+        plugin_dir, plugin = self._plugin(tmp_path)
+        (plugin_dir / ".codex-plugin").mkdir()
+        source_iface = {
+            "name": "demo",
+            "interface": {
+                "shortDescription": "A subtitle far beyond the thirty-character portal limit",
+                "category": "Coding",
+            },
+        }
+        (plugin_dir / ".codex-plugin" / "plugin.json").write_text(
+            json.dumps(source_iface), encoding="utf-8"
+        )
+        adapter, out = self._adapter(tmp_path)
+        adapter.emit_plugin(plugin)
+        emitted = json.loads(
+            (out / ".enconvo" / "plugins" / "demo" / ".codex-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert emitted["interface"]["category"] == "Developer Tools"
+        assert len(emitted["interface"]["shortDescription"]) <= 30
+        # The source manifest is untouched (clean weekly upstream merges).
+        assert (
+            json.loads((plugin_dir / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+            == source_iface
+        )
+
+    def test_claude_manifest_drops_fields_the_marketplace_entry_takes(self, tmp_path):
+        _, _, plugin = None, None, None
+        plugin_dir = tmp_path / "src" / "demo"
+        (plugin_dir / ".claude-plugin").mkdir(parents=True)
+        manifest = {
+            "name": "demo",
+            "description": "Demo.",
+            "category": "documentation",
+            "keywords": ["a"],
+            "homepage": "https://example.com",
+            "license": "MIT",
+            "skills": ["./skills/one", "./skills/two"],
+        }
+        (plugin_dir / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        plugin = PluginSource(
+            name="demo", dir=plugin_dir, plugin_json=json.loads(json.dumps(manifest))
+        )
+        adapter, out = self._adapter(tmp_path)
+        adapter.emit_plugin(plugin)
+        adapter.emit_global([plugin])
+        emitted = json.loads(
+            (out / ".enconvo" / "plugins" / "demo" / ".claude-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for field in ("category", "keywords", "homepage", "license"):
+            assert field not in emitted
+        assert emitted["skills"] == "./skills"
+        entry = json.loads(
+            (out / ".enconvo" / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+        )["plugins"][0]
+        assert entry["category"] == "documentation"
+        assert entry["keywords"] == ["a"]
+        assert entry["license"] == "MIT"
